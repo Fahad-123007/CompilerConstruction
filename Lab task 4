@@ -1,0 +1,275 @@
+using System;
+using System.IO;
+using System.Collections.Generic;
+using System.Text;
+
+namespace LexicalAnalyzer
+{
+    // Token Types
+    public enum TokenType
+    {
+        IDENTIFIER,
+        NUMBER,
+        OPERATOR,
+        KEYWORD,
+        STRING_LITERAL,
+        COMMENT,
+        PARENTHESIS,
+        BRACKET,
+        BRACE,
+        SEMICOLON,
+        COMMA,
+        EOF,
+        UNKNOWN
+    }
+
+    // Token Representation
+    public class Token
+    {
+        public TokenType Type { get; }
+        public string Value { get; }
+        public int Line { get; }
+        public int Column { get; }
+
+        public Token(TokenType type, string value, int line, int column)
+        {
+            Type = type;
+            Value = value;
+            Line = line;
+            Column = column;
+        }
+
+        public override string ToString()
+        {
+            return $"Token({Type}, '{Value}', Line={Line}, Column={Column})";
+        }
+    }
+
+    // Lexical Analyzer
+    public class LexicalAnalyzer
+    {
+        private const int BUFFER_SIZE = 4096;
+        private const char EOF_MARKER = '\0';
+
+        private readonly HashSet<string> _keywords = new() { "if", "else", "while", "for", "return", "int", "string", "bool", "class", "void" };
+        private readonly HashSet<char> _operators = new() { '+', '-', '*', '/', '%', '=', '>', '<', '!', '&', '|' };
+
+        private readonly char[] _buffer1;
+        private readonly char[] _buffer2;
+        private readonly StreamReader _reader;
+
+        private int _currentBufferIndex;
+        private int _bufferPosition;
+        private int _line;
+        private int _column;
+        private bool _endOfFile;
+        
+        public LexicalAnalyzer(string filePath)
+        {
+            _buffer1 = new char[BUFFER_SIZE + 1];
+            _buffer2 = new char[BUFFER_SIZE + 1];
+            _reader = new StreamReader(filePath);
+            _currentBufferIndex = 0;
+            _bufferPosition = 0;
+            _line = 1;
+            _column = 1;
+            _endOfFile = false;
+
+            LoadBuffer(0);
+            LoadBuffer(1);
+        }
+
+        private void LoadBuffer(int bufferIndex)
+        {
+            char[] buffer = bufferIndex == 0 ? _buffer1 : _buffer2;
+            int charsRead = _reader.Read(buffer, 0, BUFFER_SIZE);
+            buffer[charsRead] = EOF_MARKER;
+
+            if (charsRead == 0) _endOfFile = true;
+        }
+
+        private char GetCurrentChar()
+        {
+            if (_endOfFile) return EOF_MARKER;
+            return (_currentBufferIndex == 0 ? _buffer1 : _buffer2)[_bufferPosition];
+        }
+
+        private void Advance()
+        {
+            if (_endOfFile) return;
+
+            _column++;
+            _bufferPosition++;
+
+            if (_bufferPosition == BUFFER_SIZE)
+            {
+                _currentBufferIndex = 1 - _currentBufferIndex;
+                _bufferPosition = 0;
+                LoadBuffer(1 - _currentBufferIndex);
+            }
+
+            if (GetCurrentChar() == '\n')
+            {
+                _line++;
+                _column = 1;
+            }
+        }
+
+        private void SkipWhitespace()
+        {
+            while (char.IsWhiteSpace(GetCurrentChar()))
+            {
+                Advance();
+            }
+        }
+
+        public Token GetNextToken()
+        {
+            SkipWhitespace();
+            if (_endOfFile) return new Token(TokenType.EOF, "EOF", _line, _column);
+
+            char currentChar = GetCurrentChar();
+            int startLine = _line;
+            int startColumn = _column;
+
+            if (char.IsLetter(currentChar) || currentChar == '_')
+                return ScanIdentifierOrKeyword(startLine, startColumn);
+            if (char.IsDigit(currentChar))
+                return ScanNumber(startLine, startColumn);
+            if (currentChar == '"')
+                return ScanStringLiteral(startLine, startColumn);
+            if (currentChar == '/' && PeekNext() == '/')
+                return ScanComment(startLine, startColumn);
+            if (_operators.Contains(currentChar))
+                return ScanOperator(startLine, startColumn);
+            
+            return ScanSymbol(startLine, startColumn);
+        }
+
+        private char PeekNext()
+        {
+            if (_bufferPosition + 1 < BUFFER_SIZE)
+                return (_currentBufferIndex == 0 ? _buffer1 : _buffer2)[_bufferPosition + 1];
+
+            return EOF_MARKER;
+        }
+
+        private Token ScanIdentifierOrKeyword(int startLine, int startColumn)
+        {
+            StringBuilder value = new();
+
+            while (char.IsLetterOrDigit(GetCurrentChar()) || GetCurrentChar() == '_')
+            {
+                value.Append(GetCurrentChar());
+                Advance();
+            }
+
+            string lexeme = value.ToString();
+            return _keywords.Contains(lexeme)
+                ? new Token(TokenType.KEYWORD, lexeme, startLine, startColumn)
+                : new Token(TokenType.IDENTIFIER, lexeme, startLine, startColumn);
+        }
+
+        private Token ScanNumber(int startLine, int startColumn)
+        {
+            StringBuilder value = new();
+
+            while (char.IsDigit(GetCurrentChar()) || GetCurrentChar() == '.')
+            {
+                value.Append(GetCurrentChar());
+                Advance();
+            }
+
+            return new Token(TokenType.NUMBER, value.ToString(), startLine, startColumn);
+        }
+
+        private Token ScanStringLiteral(int startLine, int startColumn)
+        {
+            StringBuilder value = new();
+            Advance();
+
+            while (GetCurrentChar() != '"' && GetCurrentChar() != EOF_MARKER)
+            {
+                value.Append(GetCurrentChar());
+                Advance();
+            }
+
+            Advance(); 
+            return new Token(TokenType.STRING_LITERAL, value.ToString(), startLine, startColumn);
+        }
+
+        private Token ScanComment(int startLine, int startColumn)
+        {
+            StringBuilder value = new();
+            Advance();
+            Advance();
+
+            while (GetCurrentChar() != '\n' && GetCurrentChar() != EOF_MARKER)
+            {
+                value.Append(GetCurrentChar());
+                Advance();
+            }
+
+            return new Token(TokenType.COMMENT, value.ToString(), startLine, startColumn);
+        }
+
+        private Token ScanOperator(int startLine, int startColumn)
+        {
+            StringBuilder value = new();
+            value.Append(GetCurrentChar());
+            Advance();
+
+            if ("=<>!".Contains(value[0]) && GetCurrentChar() == '=')
+            {
+                value.Append(GetCurrentChar());
+                Advance();
+            }
+
+            return new Token(TokenType.OPERATOR, value.ToString(), startLine, startColumn);
+        }
+
+        private Token ScanSymbol(int startLine, int startColumn)
+        {
+            char currentChar = GetCurrentChar();
+            Advance();
+
+            return currentChar switch
+            {
+                '(' or ')' => new Token(TokenType.PARENTHESIS, currentChar.ToString(), startLine, startColumn),
+                '[' or ']' => new Token(TokenType.BRACKET, currentChar.ToString(), startLine, startColumn),
+                '{' or '}' => new Token(TokenType.BRACE, currentChar.ToString(), startLine, startColumn),
+                ';' => new Token(TokenType.SEMICOLON, ";", startLine, startColumn),
+                ',' => new Token(TokenType.COMMA, ",", startLine, startColumn),
+                _ => new Token(TokenType.UNKNOWN, currentChar.ToString(), startLine, startColumn),
+            };
+        }
+
+        public void Close() => _reader.Close();
+    }
+
+    class Program
+    {
+        static void Main()
+        {
+            string filePath = "week3/code.txt";
+            if (!File.Exists(filePath))
+            {
+                Console.WriteLine("Error: code.txt not found.");
+                return;
+            }
+
+            using LexicalAnalyzer analyzer = new(filePath);
+            Token token;
+            int tokenCount = 0;
+
+            do
+            {
+                token = analyzer.GetNextToken();
+                Console.WriteLine(token);
+                tokenCount++;
+            } while (token.Type != TokenType.EOF);
+
+            Console.WriteLine($"Analysis complete. Found {tokenCount} tokens.");
+        }
+    }
+}
